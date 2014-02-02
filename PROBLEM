@@ -1,0 +1,300 @@
+
+Due to rellocation issues, it was a problem to link libgtmshr.so.
+One solution was to replace -shared by -G, but the result
+was not working at all.
+Another solution was to keep -shared and use -mimpure-text and
+also experiment with -mcmodel=[medium|large].
+The last solution resulted in a working libgtmshr, but it sill
+has some issues that can be easily defined as "GT.M dies on
+SIGSEGV in any case of any level of errors: unknown routine,
+missing global directory or database, ..."
+
+It always reports error on sr_unix/jobchild_init.c:78 line,
+but the code in jobchild_init is OK and if I hack it to not
+call GETENV or skip entire if-condition in there, the error
+appears few lines later...
+I think it is all because of the rellocation thing.
+
+Of course, GT.M works somehow, but proper error handling is
+quite good feature to have :-)
+
+NOTE: Since there were folks having similar rellocation issues
+with another projects (R, Perl, etc.), their solution was to go
+with Sun Studio instead of GCC. As Sun Studio 12.1 is an optional
+package of OpenIndiana, we can try it too.
+
+I have also tried to force GCC to use GNU linker rather than
+linker delivered by SUN (and used as GCC default linker).
+When using the GNU linker, no relocation issues were reported
+(even without -mimpure-text), but the GT.M had exactly the same
+issues + mupip didn't work at all :-(
+
+
+Here is a quick illustration of the problem:
+(example uses GT.M built with GCC + Solaris Linker)
+
+$ pkg list | ggrep -e gcc-43 -e ncurses -e studio
+developer/gcc/gcc-43 (opensolaris.org)            4.3.3-0.133                i--
+developer/sunstudio12u1 (opensolaris.org)         12.1.1-0.111               i--
+library/ncurses                                   0.5.11-0.151.1.7           i--
+$ 
+$ 
+$ gcc -v
+Using built-in specs.
+Target: i386-pc-solaris2.11
+Configured with: ../gcc-4.3.3/configure --prefix=/usr/gcc/4.3 --libexecdir=/usr/gcc/4.3/lib --enable-bootstrap=yes --enable-languages=c,c++,objc,fortran --enable-objc-gc --enable-shared --disable-static --disable-libtool-lock --enable-concept-checks --enable-libssp --enable-threads=posix --enable-tls=yes --with-system-zlib --with-gnu-as --with-as=/usr/bin/gas --without-gnu-ld --with-ld=/usr/ccs/bin/ld --with-gmp-include=/usr/include/gmp --with-gmp-lib=/usr/lib --with-mpfr-include=/usr/include/mpfr --with-mpfr-lib=/usr/lib --enable-c99 --enable-nls --enable-wchar_t --enable-libstdcxx-allocator=mt --with-pic
+Thread model: posix
+gcc version 4.3.3 (GCC) 
+$ 
+$ 
+$ /usr/ccs/bin/ld -V
+ld: Software Generation Utilities - Solaris Link Editors: 5.11-1.1726
+$ 
+$ 
+$ /usr/gnu/bin/ld -V
+GNU ld (GNU Binutils) 2.19
+  Supported emulations:
+   elf_i386_ldso
+   elf_i386
+   elf_x86_64
+$ 
+$ 
+$ uname -rsmv
+SunOS 5.11 oi_151a7 i86pc
+$ 
+$ 
+$ elfdump libgtmshr.so | grep TEXTREL
+      [28]  TEXTREL           0                   
+      [35]  FLAGS             0x4                 [ TEXTREL ]
+$ 
+$ 
+$ size -f libgtmshr.so | sed 's/ + /#/g' | tr '#' '\n' | sort -n
+0(.bssf)
+0(.picdata)
+4(.rodata.cst4)
+8(.jcr)
+11(.fini)
+16(.ctors)
+16(.dtors)
+16(.init)
+32(.rodata.cst16)
+280(.rodata.cst8)
+400(.SUNW_version)
+816(.dynamic)
+1536(.data.rel.ro)
+5704(.data.rel)
+7296(.data.rel.local)
+9362(.SUNW_versym)
+12914(.data)
+16012(.eh_frame_hdr)
+17468(.SUNW_dynsymsort)
+26192(.plt)
+27704(.got)
+31584(.SUNW_ldynsym)
+31824(.rodata.str1.1)
+35904(.data.rel.ro.local)
+37496(.hash)
+39264(.rela.plt)
+67464(.rodata)
+84766(.dynstr)
+110490(.rodata.str1.8)
+112344(.dynsym)
+122208(.eh_frame)
+161112(.SUNW_reloc)
+167148(.bss) = 2785477
+1658086(.text)
+$ 
+$ 
+$ ./mumps -di
+
+GTM>w $zv
+GT.M V6.0-000 OpenIndiana x86_64
+GTM>
+
+GTM>D ^GDE
+%GDE-I-GDUSEDEFS, Using defaults for Global Directory 
+        /home/tmr/gtm_V60000_openindiana_x8664_src/build/mumps.gld
+
+GDE> exit
+%GDE-I-VERIFY, Verification OK
+
+%GDE-I-GDCREATE, Creating Global Directory file 
+        /home/tmr/gtm_V60000_openindiana_x8664_src/build/mumps.gld
+$ 
+$ 
+$ ./mupip create
+Created file /home/tmr/gtm_V60000_openindiana_x8664_src/build/mumps.dat
+$ 
+$ 
+$ ./mumps -di
+
+GTM>s $zrou="/home/tmr $gtm_dist"
+
+GTM>d ^ZTMR
+Hello World!
+
+GTM>d SHOW^ZTMR
+
+MUMPS version is: GT.M V6.0-000 OpenIndiana x86_64
+
+Code of this routine:
+
+ZTMR W "Hello World!",! Q
+ModuleID() Q $P($ZPOS,"^",2)
+SHOW
+  W !,"MUMPS version is: ",$ZV,!!
+  W "Code of this routine:",!!
+  ZP @("^"_$$ModuleID) W "----",!!,"Let's call us:",!
+  X "D ^"_$$ModuleID W !!
+  W "Test globals:",!
+  K ^zFoo
+  F i=0:1:25 S ^zFoo(i)=$C($A("a")+i)
+  ZWR ^zFoo
+  W !!,"Database allocation stats:",!
+  D ^%FREECNT W !
+  Q
+----
+
+Let's call us:
+Hello World!
+
+
+Test globals:
+^zFoo(0)="a"
+^zFoo(1)="b"
+^zFoo(2)="c"
+^zFoo(3)="d"
+^zFoo(4)="e"
+^zFoo(5)="f"
+^zFoo(6)="g"
+^zFoo(7)="h"
+^zFoo(8)="i"
+^zFoo(9)="j"
+^zFoo(10)="k"
+^zFoo(11)="l"
+^zFoo(12)="m"
+^zFoo(13)="n"
+^zFoo(14)="o"
+^zFoo(15)="p"
+^zFoo(16)="q"
+^zFoo(17)="r"
+^zFoo(18)="s"
+^zFoo(19)="t"
+^zFoo(20)="u"
+^zFoo(21)="v"
+^zFoo(22)="w"
+^zFoo(23)="x"
+^zFoo(24)="y"
+^zFoo(25)="z"
+
+
+Database allocation stats:
+Region          Free     Total          Database file
+------          ----     -----          -------------
+DEFAULT           96       100 ( 96.0%) /home/tmr/gtm_V60000_openindiana_x8664_src/build/mumps.dat
+
+
+GTM>D ^UnKnownRoutine
+%GTM-E-ZLINKFILE, Error while zlinking "UnKnownRoutine"
+%GTM-E-FILENOTFND, File UnKnownRoutine not found
+Segmentation fault (core dumped)
+$
+$
+$ ./mumps -di
+
+GTM>D ^%GD
+
+Global Directory
+
+Global ^
+^zFoo     
+Total of 1 global.
+
+GTM>zsy "rm mumps.dat"
+
+GTM>D ^%GD
+
+Global Directory
+
+Global ^
+^zFoo     
+Total of 1 global.
+
+GTM>zsy "rm mumps.gld"
+
+GTM>D ^%GD
+
+Global Directory
+
+Global ^
+^zFoo     
+Total of 1 global.
+
+GTM>h
+$ 
+$ 
+$ ./mumps -di
+
+GTM>D ^%GD
+
+Global Directory
+
+Global ^
+Segmentation fault (core dumped)
+$ 
+$ 
+$ gdb ./mumps 
+GNU gdb 6.8
+Copyright (C) 2008 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type "show copying"
+and "show warranty" for details.
+This GDB was configured as "i386-pc-solaris2.11"...
+(gdb) run -di
+Starting program: /home/tmr/gtm_V60000_openindiana_x8664_src/build/mumps -di
+warning: Lowest section in /lib/amd64/libdl.so.1 is .dynamic at 00000000000000b0
+warning: Lowest section in /lib/amd64/libpthread.so.1 is .dynamic at 00000000000000b0
+warning: Lowest section in /lib/amd64/librt.so.1 is .dynamic at 00000000000000b0
+
+GTM>s $zrou="/home/tmr $gtm_dist"
+
+GTM>D ^ZTMR
+Hello World!
+
+GTM>D ^%GD
+
+Global Directory
+
+Global ^
+
+Program received signal SIGSEGV, Segmentation fault.
+0xfffffd7ff252a739 in jobchild_init () at /home/tmr/gtm_V60000_openindiana_x8664_src/sr_unix/jobchild_init.c:78
+78              if ((c = GETENV(CHILD_FLAG_ENV)) && strlen(c))
+(gdb) c
+Continuing.
+
+Program terminated with signal SIGSEGV, Segmentation fault.
+The program no longer exists.
+(gdb) run -di
+Starting program: /home/tmr/gtm_V60000_openindiana_x8664_src/build/mumps -di
+[New LWP    1        ]
+warning: Lowest section in /lib/amd64/libdl.so.1 is .dynamic at 00000000000000b0
+warning: Lowest section in /lib/amd64/libpthread.so.1 is .dynamic at 00000000000000b0
+warning: Lowest section in /lib/amd64/librt.so.1 is .dynamic at 00000000000000b0
+
+GTM>D ^ZTMR
+%GTM-E-ZLINKFILE, Error while zlinking "ZTMR"
+%GTM-E-FILENOTFND, File ZTMR not found
+
+Program received signal SIGSEGV, Segmentation fault.
+0xfffffd7ff252a739 in jobchild_init () at /home/tmr/gtm_V60000_openindiana_x8664_src/sr_unix/jobchild_init.c:78
+78              if ((c = GETENV(CHILD_FLAG_ENV)) && strlen(c))
+(gdb) c
+Continuing.
+
+Program terminated with signal SIGSEGV, Segmentation fault.
+The program no longer exists.
+(gdb) q
+$ 
+$ 
